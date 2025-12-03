@@ -1,5 +1,8 @@
 # 🚀 TP 3 : Base de Données et Déploiement en Production
 
+**Durée estimée :** 3h00
+**Prérequis :** TP 1 & 2 terminés + compte GitHub
+
 ## 🎯 Objectifs de l'Atelier
 
 À la fin de cet atelier, vous aurez :
@@ -14,7 +17,6 @@
 ## 📦 Architecture Cible
 
 **Avant (Local - Stockage en mémoire) :**
-
 ```
 Frontend (localhost:5173) ← → Backend (localhost:8000)
                                   ↓
@@ -23,33 +25,52 @@ Frontend (localhost:5173) ← → Backend (localhost:8000)
 ```
 
 **Après (Production avec PostgreSQL) :**
-
 ```
-Frontend (Render)                Backend (Render)              Database (Supabase)
+Frontend (Render)                Backend (Render)              Database (Render)
 taskflow-frontend.onrender.com → taskflow-backend.onrender.com → PostgreSQL
-         HTTPS                            HTTPS + CORS                500 MB
+         HTTPS                            HTTPS + CORS                256 MB
                                                                   ✅ Données persistantes
 ```
+
+---
+
+## 🎯 Pourquoi PostgreSQL ?
+
+**Problème actuel :** Les données sont stockées dans une liste Python en mémoire
+- ❌ Données perdues à chaque redémarrage
+- ❌ Impossible de scaler (plusieurs instances)
+- ❌ Pas de requêtes complexes
+
+**Avec PostgreSQL :**
+- ✅ Données persistantes
+- ✅ Requêtes SQL puissantes
+- ✅ Base de données professionnelle
+- ✅ Gratuit sur Render
 
 ---
 
 ## ✍️ Exercice 1 : Installer les Dépendances PostgreSQL
 
 ### Objectif
-
 Ajouter SQLAlchemy et le driver PostgreSQL au backend.
 
 ### Instructions
 
-**Ajoutez les packages nécessaires :**
+1. **Ajoutez les packages nécessaires :**
+   ```bash
+   cd backend
+   uv add sqlalchemy psycopg2-binary
+   ```
 
-```bash
-cd backend
-uv add sqlalchemy psycopg2-binary
-```
+2. **Vérifiez l'installation :**
+   ```bash
+   uv run python -c "import sqlalchemy; print(f'SQLAlchemy {sqlalchemy.__version__}')"
+   ```
+
+### ✅ Résultat attendu
+Vous devriez voir la version de SQLAlchemy s'afficher (ex: `SQLAlchemy 2.0.25`)
 
 ### 💡 Ce que font ces packages
-
 - **`sqlalchemy`** : ORM (Object-Relational Mapping) pour Python - permet de manipuler la base de données avec des objets Python
 - **`psycopg2-binary`** : Driver PostgreSQL - permet à Python de se connecter à PostgreSQL
 
@@ -58,61 +79,26 @@ uv add sqlalchemy psycopg2-binary
 ## ✍️ Exercice 2 : Configurer la Base de Données
 
 ### Objectif
-
 Créer le fichier de configuration pour la connexion à la base de données.
 
 ### Instructions
 
-**Créez le fichier `backend/src/database.py` :**
+1. **Créez le fichier `backend/src/database.py`**
 
-```python
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+2. **Ajoutez la configuration suivante :**
+   - Importer les modules nécessaires : `sqlalchemy`, `sessionmaker`, `declarative_base`
+   - Lire `DATABASE_URL` depuis les variables d'environnement (défaut: `sqlite:///./taskflow.db`)
+   - Créer un moteur SQLAlchemy avec `create_engine()`
+   - Pour SQLite : ajouter `connect_args={"check_same_thread": False}`
+   - Pour PostgreSQL : configurer la pool de connexions avec `pool_size=5`, `max_overflow=10`, `pool_pre_ping=True`
+   - Créer une factory de sessions avec `sessionmaker()`
+   - Créer une `Base` avec `declarative_base()` pour les modèles ORM
 
-# Lire l'URL de la base de données depuis les variables d'environnement
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./taskflow.db")
-
-# Configuration du moteur SQLAlchemy
-if DATABASE_URL.startswith("sqlite"):
-    # SQLite (développement local)
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False}
-    )
-else:
-    # PostgreSQL (production)
-    engine = create_engine(
-        DATABASE_URL,
-        pool_size=5,
-        max_overflow=10,
-        pool_pre_ping=True
-    )
-
-# Factory de sessions
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base pour les modèles ORM
-Base = declarative_base()
-
-
-def get_db():
-    """Générateur qui fournit une session de base de données."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def init_db():
-    """Initialise la base de données en créant toutes les tables."""
-    from . import models  # Import des modèles pour créer les tables
-    Base.metadata.create_all(bind=engine)
-```
+3. **Ajoutez deux fonctions :**
+   - `get_db()` : Générateur qui fournit une session de base de données (pour FastAPI Depends)
+   - `init_db()` : Initialise la base de données en créant toutes les tables
 
 ### 💡 Points importants
-
 - **`DATABASE_URL`** : URL de connexion (SQLite en local, PostgreSQL en production)
 - **Pool de connexions** : Réutilise les connexions pour améliorer les performances
 - **`pool_pre_ping`** : Vérifie que la connexion est vivante avant de l'utiliser
@@ -122,314 +108,93 @@ def init_db():
 ## ✍️ Exercice 3 : Créer le Modèle de Données
 
 ### Objectif
-
 Définir le schéma de la table `tasks` avec SQLAlchemy ORM.
 
 ### Instructions
 
-**Créez le fichier `backend/src/models.py` :**
+1. **Créez le fichier `backend/src/models.py`**
 
-```python
-from enum import Enum
-from sqlalchemy import Column, String, DateTime, Enum as SQLEnum
-from sqlalchemy.sql import func
+2. **Déplacez les enums depuis `app.py` :**
+   - `TaskStatus` : todo, in_progress, done
+   - `TaskPriority` : low, medium, high
 
-from .database import Base
-
-
-class TaskStatus(str, Enum):
-    """Statuts possibles d'une tâche."""
-    TODO = "todo"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
-
-
-class TaskPriority(str, Enum):
-    """Priorités possibles d'une tâche."""
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class TaskModel(Base):
-    """Modèle SQLAlchemy pour la table tasks."""
-    __tablename__ = "tasks"
-
-    id = Column(String, primary_key=True, index=True)
-    title = Column(String(200), nullable=False)
-    description = Column(String(1000), nullable=True)
-    status = Column(SQLEnum(TaskStatus), default=TaskStatus.TODO)
-    priority = Column(SQLEnum(TaskPriority), default=TaskPriority.MEDIUM)
-    assignee = Column(String(100), nullable=True)
-    due_date = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-```
+3. **Créez la classe `TaskModel` qui hérite de `Base` :**
+   - Définir `__tablename__ = "tasks"`
+   - Ajouter les colonnes avec `Column()` :
+     - `id` : String, primary key, index
+     - `title` : String(200), non nullable
+     - `description` : String(1000), nullable
+     - `status` : Enum (TaskStatus), défaut TODO
+     - `priority` : Enum (TaskPriority), défaut MEDIUM
+     - `assignee` : String(100), nullable
+     - `due_date` : DateTime, nullable
+     - `created_at` : DateTime, auto (server_default=func.now())
+     - `updated_at` : DateTime, auto (server_default=func.now(), onupdate=func.now())
 
 ### 💡 Avantages de l'ORM
-
 - Pas besoin d'écrire du SQL directement
 - Type-safety avec Python
 - Migrations de schéma facilitées
-- Timestamps automatiques (`created_at`, `updated_at`)
+- Timestamps automatiques
 
 ---
 
 ## ✍️ Exercice 4 : Migrer l'Application vers PostgreSQL
 
 ### Objectif
-
 Adapter `app.py` pour utiliser SQLAlchemy au lieu du stockage en mémoire.
-
-### Contexte
-
-Actuellement, `app.py` stocke les tâches dans un dictionnaire Python (`tasks_db`). Au redémarrage du serveur, toutes les données sont perdues. Nous allons migrer vers SQLAlchemy pour persister les données dans PostgreSQL.
 
 ### Instructions
 
-**Étape 1 : Mettre à jour les imports**
+**Partie 1 : Imports et nettoyage**
 
-Ouvrez `backend/src/app.py` et **ajoutez** les imports nécessaires (gardez les imports existants !) :
+1. **Ajoutez les imports nécessaires :**
+   - `from sqlalchemy.orm import Session`
+   - `from sqlalchemy import text`
+   - `from .database import get_db, init_db`
+   - `from .models import TaskModel, TaskStatus, TaskPriority`
 
-```python
-from contextlib import asynccontextmanager
-import uuid
-from fastapi import Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+2. **Supprimez l'ancien code :**
+   - ❌ Supprimez les définitions de `TaskStatus` et `TaskPriority` (maintenant dans models.py)
+   - ❌ Supprimez `tasks_storage: List[Task] = []`
+   - ❌ Supprimez les fonctions `clear_tasks()` et `get_tasks_storage()`
 
-from .database import get_db, init_db
-from .models import TaskModel, TaskStatus, TaskPriority
-```
+**Partie 2 : Modifier le lifespan**
 
-💡 **Pourquoi ces imports ?**
+3. **Dans la fonction `lifespan()`, appelez `init_db()` au démarrage**
 
-- `Depends` : Injection de dépendances FastAPI pour la session DB
-- `Session` : Type de la session SQLAlchemy
-- `text` : Pour exécuter du SQL brut (health check)
-- `uuid` : Pour générer des identifiants uniques
+**Partie 3 : Modifier les endpoints (utilisez `db: Session = Depends(get_db)`)**
 
-**Étape 2 : Nettoyer le code obsolète**
+4. **GET /tasks :**
+   - Récupérer toutes les tâches avec `db.query(TaskModel).all()`
 
-Cherchez et supprimez ces éléments dans `app.py` :
+5. **POST /tasks :**
+   - Créer un `TaskModel` avec les données reçues
+   - Ajouter à la session avec `db.add()`
+   - Sauvegarder avec `db.commit()`
+   - Rafraîchir avec `db.refresh()`
 
-```python
-# ❌ SUPPRIMER : Ces classes (lignes ~31-42)
-class TaskStatus(str, Enum):
-    TODO = "todo"
-    ...
+6. **GET /tasks/{task_id} :**
+   - Chercher avec `db.query(TaskModel).filter(TaskModel.id == task_id).first()`
+   - Lever `HTTPException(404)` si non trouvé
 
-class TaskPriority(str, Enum):
-    LOW = "low"
-    ...
+7. **PUT /tasks/{task_id} :**
+   - Chercher la tâche
+   - Mettre à jour les champs avec `setattr()`
+   - Commit et refresh
 
-# ❌ SUPPRIMER : Le stockage en mémoire (lignes ~78-79)
-tasks_db: Dict[int, Task] = {}
-next_id = 1
+8. **DELETE /tasks/{task_id} :**
+   - Chercher la tâche
+   - Supprimer avec `db.delete()`
+   - Commit
 
-# ❌ SUPPRIMER : Ces fonctions (lignes ~82-94)
-def get_next_id() -> int:
-    ...
-
-def clear_tasks():
-    ...
-
-# ⚠️ À MODIFIER : Le health check (sera réécrit à l'étape 6)
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "tasks_count": len(tasks_db)}
-```
-
-> 💡 Ces éléments sont maintenant dans `models.py` ou remplacés par SQLAlchemy.
-
-**Étape 3 : Remplacer le système de démarrage**
-
-Cherchez et supprimez les anciens handlers :
-
-```python
-# ❌ SUPPRIMER ces deux fonctions (lignes ~129-139)
-@app.on_event("startup")
-def startup():
-    ...
-
-@app.on_event("shutdown")
-def shutdown():
-    ...
-```
-
-Remplacez-les par le nouveau système `lifespan` (à placer AVANT la création de `app`) :
-
-```python
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifecycle manager - initialise la DB au démarrage."""
-    logger.info("🚀 TaskFlow backend starting up...")
-    init_db()  # Crée les tables
-    logger.info("✅ Database initialized")
-    yield
-    logger.info("🛑 TaskFlow backend shutting down...")
-
-
-app = FastAPI(
-    title="TaskFlow API",
-    ...
-    lifespan=lifespan,  # ← Ajouter cette ligne
-)
-```
-
-**Étape 3b : Ajouter le middleware CORS**
-
-Ajoutez ces imports en haut du fichier (avec les autres imports) :
-
-```python
-from fastapi.middleware.cors import CORSMiddleware
-import os
-```
-
-Puis ajoutez ce code **juste après** `app = FastAPI(...)` :
-
-```python
-# Configuration CORS pour le frontend
-cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
-cors_origins = [origin.strip() for origin in cors_origins_str.split(",")]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-> ⚠️ **Important** : Le middleware CORS est essentiel pour que le frontend puisse communiquer avec le backend en production. La variable `CORS_ORIGINS` sera configurée sur Render à l'exercice 7.
-
-**Étape 4 : Modifier la classe Task existante**
-
-Cherchez la classe `Task` dans `app.py` et remplacez-la :
-
-```python
-# ❌ AVANT (ne fonctionne plus avec SQLAlchemy)
-class Task(TaskCreate):
-    id: int  # ← int ne marche pas avec UUID
-    created_at: datetime
-    updated_at: datetime
-
-# ✅ APRÈS (compatible SQLAlchemy)
-class Task(BaseModel):
-    """Model for task response."""
-    id: str  # ← Changé en str pour UUID
-    title: str
-    description: Optional[str] = None
-    status: TaskStatus
-    priority: TaskPriority
-    assignee: Optional[str] = None
-    due_date: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True  # Permet la conversion depuis SQLAlchemy
-```
-
-> 💡 **Pourquoi ces changements ?**
->
-> - `id: str` au lieu de `int` → les UUID sont des strings
-> - `from_attributes = True` → permet à Pydantic de lire les objets SQLAlchemy
-
-**Étape 5 : Modifier les endpoints**
-
-Pour chaque endpoint, ajoutez `db: Session = Depends(get_db)` comme paramètre.
-
-**Exemple simple avec health check :**
-
-```python
-# ⚠️ AVANT (ne fonctionne plus)
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "tasks_count": len(tasks_db)}
-
-# ✅ APRÈS (avec SQLAlchemy)
-@app.get("/health")
-async def health_check(db: Session = Depends(get_db)):
-    """Health check with database status."""
-    try:
-        db.execute(text("SELECT 1"))
-        tasks_count = db.query(TaskModel).count()
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "tasks_count": tasks_count
-        }
-    except Exception as e:
-        return {"status": "unhealthy", "database": str(e)}
-```
-
-> ⚠️ **Attention** : `db: Session = Depends(get_db)` doit être dans les **paramètres** de la fonction, pas dans le corps !
-
-**Exemple complet avec GET /tasks :**
-
-```python
-@app.get("/tasks", response_model=List[Task])
-async def get_tasks(
-    status: Optional[TaskStatus] = None,
-    priority: Optional[TaskPriority] = None,
-    assignee: Optional[str] = None,
-    db: Session = Depends(get_db)  # ← Toujours en dernier dans les paramètres
-):
-    """Get all tasks with optional filtering."""
-    query = db.query(TaskModel)
-
-    if status:
-        query = query.filter(TaskModel.status == status)
-    if priority:
-        query = query.filter(TaskModel.priority == priority)
-    if assignee:
-        query = query.filter(TaskModel.assignee == assignee)
-
-    return query.all()
-```
-
-> ⚠️ **Ne confondez pas `Task` et `TaskModel` !**
->
-> | Modèle | Type | Utilisation |
-> |--------|------|-------------|
-> | `Task` | Pydantic | `response_model=Task` (réponses API) |
-> | `TaskModel` | SQLAlchemy | `db.query(TaskModel)`, `TaskModel(...)` (opérations DB) |
->
-> **Règle simple** : Pour tout ce qui touche à la base de données → `TaskModel`
-
-Adaptez chaque endpoint selon ce tableau :
-
-| Endpoint | Logique SQLAlchemy |
-|----------|-------------------|
-| GET /tasks | `db.query(TaskModel).all()` |
-| GET /tasks/{id} | `db.query(TaskModel).filter(TaskModel.id == task_id).first()` |
-| POST /tasks | `TaskModel(id=str(uuid.uuid4()), ...)` → `db.add()` → `db.commit()` → `db.refresh()` |
-| PUT /tasks/{id} | `setattr(task, field, value)` → `db.commit()` → `db.refresh(task)` |
-| DELETE /tasks/{id} | `db.delete(task)` → `db.commit()` |
-
-> 💡 **Pattern SQLAlchemy :**
->
-> 1. `db.add(obj)` - Ajoute à la session
-> 2. `db.commit()` - Sauvegarde en base
-> 3. `db.refresh(obj)` - Recharge les valeurs générées (timestamps, etc.)
->
-> **Indice POST /tasks** : Créez un `TaskModel` (pas `Task`) avec `id=str(uuid.uuid4())` au lieu de `get_next_id()`
-
-### 💡 Points clés à retenir
-
-| Concept | Explication |
-|---------|-------------|
-| `Depends(get_db)` | FastAPI injecte automatiquement une session DB |
-| `db.commit()` | Obligatoire pour sauvegarder les changements |
-| `db.refresh()` | Recharge l'objet avec les valeurs de la DB (timestamps) |
-| `from_attributes = True` | Permet à Pydantic de lire les attributs SQLAlchemy |
+9. **Améliorer /health :**
+   - Tester la connexion DB avec `db.execute(text("SELECT 1"))`
+   - Compter les tâches avec `db.query(TaskModel).count()`
+   - Retourner le statut de la DB et le nombre de tâches
 
 ### ✅ Checkpoint
-
 Testez localement :
-
 ```bash
 cd backend
 uv run uvicorn src.app:app --reload
@@ -446,332 +211,172 @@ Vous devriez voir un fichier `taskflow.db` créé dans `backend/`
 ## ✍️ Exercice 5 : Adapter les Tests
 
 ### Objectif
-
 Modifier les tests pour utiliser une base de données SQLite temporaire.
-
-### Contexte
-
-Les tests utilisent actuellement `clear_tasks()` qui n'existe plus. Nous devons créer une base de données de test isolée et nettoyer les données entre chaque test.
 
 ### Instructions
 
-Remplacez le contenu de `backend/tests/conftest.py` par :
+1. **Dans `backend/tests/conftest.py`, modifiez la fixture :**
+   - Créer une base de données de test temporaire avec `tempfile.mktemp()`
+   - Créer un moteur de test avec `create_engine(TEST_DATABASE_URL)`
+   - Créer une factory de sessions de test avec `sessionmaker()`
+   - Fixture `setup_test_database` (scope="session") : créer toutes les tables
+   - Fixture `clear_test_data` (autouse=True) : nettoyer entre chaque test
+   - Fixture `client` : override `get_db` pour utiliser la DB de test
 
-```python
-import pytest
-import tempfile
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+2. **Lancez les tests :**
+   ```bash
+   cd backend
+   uv run pytest -v
+   ```
 
-from src.app import app
-from src.database import Base, get_db
-from src.models import TaskModel
-
-TEST_DB_FILE = tempfile.mktemp(suffix=".db")
-TEST_DATABASE_URL = f"sqlite:///{TEST_DB_FILE}"
-
-test_engine = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-
-@pytest.fixture(scope="session")
-def setup_test_database():
-    """Crée les tables une seule fois pour tous les tests."""
-    Base.metadata.create_all(bind=test_engine)
-    yield
-    Base.metadata.drop_all(bind=test_engine)
-
-
-@pytest.fixture(autouse=True)
-def clear_test_data(setup_test_database):
-    """Nettoie les données entre chaque test."""
-    db = TestSessionLocal()
-    db.query(TaskModel).delete()
-    db.commit()
-    db.close()
-
-
-@pytest.fixture
-def client(setup_test_database):
-    """Client de test avec base de données isolée."""
-    def override_get_db():
-        db = TestSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
-```
-
-> 💡 **`dependency_overrides`** permet de remplacer `get_db` par une version qui utilise la base de test au lieu de la vraie base.
-
-### ✅ Checkpoint
-
-```bash
-cd backend
-uv run pytest -v
-```
-
+### ✅ Résultat attendu
 Tous les tests doivent passer (19+ tests)
 
 ---
 
-## ✍️ Exercice 6 : Configurer Supabase (Base de Données)
+## ✍️ Exercice 6 : Créer un Compte Render
 
 ### Objectif
-
-Créer une base de données PostgreSQL gratuite sur Supabase.
+Préparer le déploiement sur Render.
 
 ### Instructions
 
-**Étape 1 : Créer un compte Supabase**
+1. **Créer un compte Render :**
+   - Allez sur https://render.com
+   - Cliquez **"Get Started"**
+   - Inscrivez-vous avec votre compte **GitHub**
+   - Autorisez Render à accéder à vos repositories
 
-1. Allez sur <https://supabase.com>
-2. Cliquez **"Start your project"**
-3. Inscrivez-vous avec votre compte **GitHub**
+2. **Explorez le Dashboard :**
+   - Familiarisez-vous avec l'interface
+   - Notez le bouton **"New +"** pour créer des services
 
-**Étape 2 : Créer un projet**
-
-1. Cliquez **"New project"**
-2. Configurez le projet :
-   - **Name** : `taskflow`
-   - **Database Password** : Choisissez un mot de passe fort (⚠️ **notez-le !**)
-   - **Region** : `West EU (Ireland)` (le plus proche)
-3. Cliquez **"Create new project"**
-4. Attendez la création (1-2 minutes)
-
-Après la création, vous arriverez sur la page d'accueil du projet :
-
-![Supabase Home](img/supabase.png)
-
-**Étape 3 : Récupérer la DATABASE_URL**
-
-1. Cliquez sur le bouton **"Connect"** en haut (visible dans le header)
-
-   ![Supabase Connect](img/connect.png)
-
-2. Dans l'onglet **Connection String** :
-   - Vérifiez que **Type** = `URI`
-   - Changez **Method** : `Session pooler` (au lieu de "Direct connection")
-
-   > ⚠️ **Important** : Render utilise IPv4, mais la connexion directe Supabase nécessite IPv6.
-   > Le **Session Pooler** résout ce problème.
-
-3. Copiez l'URL affichée
-4. **Important** : Remplacez `[YOUR-PASSWORD]` par le mot de passe que vous avez choisi à l'étape 2
-
-L'URL ressemble à :
-
-```
-postgresql://postgres.[PROJECT-ID]:[YOUR-PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:5432/postgres
-```
-
-> 💡 Notez le host **pooler.supabase.com** (au lieu de db.xxx.supabase.co).
-
-**⚠️ Gardez cette URL !** Vous en aurez besoin pour l'exercice 7.
-
-### 💡 Pourquoi Supabase ?
-
-| Avantage | Description |
-|----------|-------------|
-| **Gratuit** | 500 MB de stockage |
-| **PostgreSQL** | Base de données professionnelle |
-| **Interface web** | Explorer les données facilement |
-| **Pas de carte bancaire** | Contrairement à d'autres services |
+### 💡 Render vs Heroku
+- ✅ Gratuit pour PostgreSQL + 2 services
+- ✅ Déploiement automatique depuis GitHub
+- ✅ Infrastructure as Code avec `render.yaml`
+- ✅ HTTPS automatique
 
 ---
 
-## ✍️ Exercice 7 : Déployer sur Render
+## ✍️ Exercice 7 : Comprendre render.yaml
 
 ### Objectif
+Comprendre l'Infrastructure as Code pour Render.
 
-Déployer le backend et le frontend sur Render. Deux méthodes sont proposées.
+### Instructions
 
-### Prérequis
+1. **Ouvrez `render.yaml` à la racine du projet**
 
-1. **Créer un compte Render** : <https://render.com>
-2. Inscrivez-vous avec **GitHub** et autorisez l'accès à vos repositories
-3. **Poussez vos changements sur GitHub :**
+2. **Analysez la structure :**
 
+**Section `databases` :**
+- Définit une base PostgreSQL gratuite
+- Région : Frankfurt (proche de vous)
+- Nom : `taskflow-db`
+
+**Section `services` (Backend) :**
+- Type : `web` (service HTTP)
+- Runtime : `python`
+- Build command : installe UV et les dépendances
+- Start command : lance uvicorn
+- Variables d'environnement :
+  - `DATABASE_URL` : injectée automatiquement depuis la DB
+  - `CORS_ORIGINS` : à configurer manuellement
+- Health check : `/health`
+
+**Section `services` (Frontend) :**
+- Type : `web`
+- Runtime : `static` (site statique)
+- Build command : `npm ci && npm run build`
+- Publish path : `frontend/dist`
+- Variable : `VITE_API_URL` à configurer
+
+### 💡 Avantages de render.yaml
+- ✅ Toute l'infrastructure est versionnée dans Git
+- ✅ Déploiement reproductible
+- ✅ Création automatique de tous les services
+- ✅ Injection automatique de DATABASE_URL
+
+---
+
+## ✍️ Exercice 8 : Déployer avec Blueprint
+
+### Objectif
+Déployer toute l'application sur Render en un clic.
+
+### Instructions
+
+1. **Assurez-vous que vos changements sont poussés sur GitHub :**
    ```bash
    git add .
    git commit -m "feat: migrate to PostgreSQL with SQLAlchemy"
    git push origin main
    ```
 
----
+2. **Sur Render Dashboard :**
+   - Cliquez **"New +"** → **"Blueprint"**
+   - Sélectionnez votre repository
+   - Render détecte automatiquement `render.yaml`
+   - Cliquez **"Apply"**
 
-### Option A : Déploiement Manuel (via Dashboard)
+3. **Attendez le déploiement (5-7 minutes) :**
+   - 3 services vont être créés :
+     - `taskflow-db` (PostgreSQL)
+     - `taskflow-backend` (FastAPI)
+     - `taskflow-frontend` (React)
 
-Cette méthode vous permet de comprendre chaque étape du déploiement.
+4. **Notez les URLs générées :**
+   ```
+   Backend:  https://taskflow-backend-XXXX.onrender.com
+   Frontend: https://taskflow-frontend-YYYY.onrender.com
+   ```
 
-**Étape 1 : Déployer le Backend**
-
-1. Sur Render Dashboard, cliquez **"New +"** → **"Web Service"**
-2. Connectez votre repository GitHub
-3. Configurez le service :
-
-   | Paramètre | Valeur |
-   |-----------|--------|
-   | **Name** | `taskflow-backend` |
-   | **Region** | `Frankfurt (EU Central)` |
-   | **Branch** | `main` |
-   | **Root Directory** | `backend` |
-   | **Runtime** | `Python 3` |
-   | **Build Command** | `pip install uv && uv sync` |
-   | **Start Command** | `uv run uvicorn src.app:app --host 0.0.0.0 --port $PORT` |
-   | **Instance Type** | `Free` |
-
-   > 💡 `$PORT` est défini automatiquement par Render - ne pas le remplacer !
-
-4. Dans la section **Environment Variables**, ajoutez :
-
-   | Name | Value |
-   |------|-------|
-   | `DATABASE_URL` | L'URL Supabase de l'exercice 6 |
-
-   > ⚠️ `CORS_ORIGINS` sera ajouté après le déploiement du frontend (étape 3)
-
-5. Cliquez **"Create Web Service"**
-
-**Étape 2 : Déployer le Frontend**
-
-1. Cliquez **"New +"** → **"Static Site"**
-2. Connectez le même repository
-3. Configurez :
-
-   | Paramètre | Valeur |
-   |-----------|--------|
-   | **Name** | `taskflow-frontend` |
-   | **Branch** | `main` |
-   | **Root Directory** | `frontend` |
-   | **Build Command** | `npm ci && npm run build` |
-   | **Publish Directory** | `dist` |
-
-4. Dans la section **Environment Variables**, ajoutez :
-
-   | Name | Value |
-   |------|-------|
-   | `VITE_API_URL` | `https://edl-starter.onrender.com` (URL du backend) |
-
-5. Cliquez **"Create Static Site"**
-
-**Étape 3 : Configurer CORS (après déploiement)**
-
-Une fois les deux services déployés, retournez dans le **Backend** :
-
-1. Dashboard → **taskflow-backend** → **Environment**
-2. Ajoutez la variable :
-
-   | Name | Value |
-   |------|-------|
-   | `CORS_ORIGINS` | `https://taskflow-frontend-XXXX.onrender.com` |
-
-3. Cliquez **"Save Changes"** → Le backend redémarre automatiquement
-
----
-
-### Option B : Déploiement avec YAML (Infrastructure as Code)
-
-Cette méthode automatise le déploiement via un fichier de configuration.
-
-**Étape 1 : Créer `render.yaml` à la racine du projet**
-
-```yaml
-services:
-  # Backend FastAPI
-  - type: web
-    name: taskflow-backend
-    runtime: python
-    region: frankfurt
-    plan: free
-    buildCommand: pip install uv && uv sync
-    startCommand: uv run uvicorn src.app:app --host 0.0.0.0 --port $PORT
-    rootDir: backend
-    envVars:
-      - key: DATABASE_URL
-        sync: false  # Configuré manuellement
-      - key: CORS_ORIGINS
-        sync: false
-    healthCheckPath: /health
-
-  # Frontend React
-  - type: web
-    name: taskflow-frontend
-    runtime: static
-    buildCommand: npm ci && npm run build
-    staticPublishPath: ./dist
-    rootDir: frontend
-    envVars:
-      - key: VITE_API_URL
-        sync: false
-```
-
-**Étape 2 : Déployer avec Blueprint**
-
-1. Poussez le fichier `render.yaml` sur GitHub
-2. Sur Render Dashboard : **"New +"** → **"Blueprint"**
-3. Sélectionnez votre repository
-4. Render détecte automatiquement `render.yaml`
-5. Cliquez **"Apply"**
-
-**Étape 3 : Configurer les Variables d'Environnement**
-
-Même configuration que l'Option A (voir ci-dessus).
-
----
-
-### 💡 Comparaison des deux méthodes
-
-| Aspect | Option A (Manuel) | Option B (YAML) |
-|--------|-------------------|-----------------|
-| **Apprentissage** | ✅ Meilleur pour comprendre | ⚡ Plus rapide |
-| **Reproductibilité** | ❌ Manuel à chaque fois | ✅ Versionné dans Git |
-| **Production** | ❌ Pas recommandé | ✅ Best practice |
-
-### ✅ Résultat attendu
-
-Après déploiement, notez vos URLs :
-
-```
-Backend:  https://edl-starter.onrender.com
-Frontend: https://taskflow-frontend-YYYY.onrender.com
-```
-
-### ⏳ Pendant l'attente (3-5 minutes)
-
+### ⏳ Pendant l'attente
 Observez les logs de build en temps réel pour chaque service.
 
 ---
 
-## ✍️ Exercice 8 : Vérifier le Déploiement
+## ✍️ Exercice 9 : Configurer CORS et API URL
 
 ### Objectif
+Connecter le frontend au backend en production.
 
+### Instructions
+
+1. **Configurer le Backend :**
+   - Dashboard → **taskflow-backend** → **Environment**
+   - Ajoutez : `CORS_ORIGINS = https://taskflow-frontend-YYYY.onrender.com`
+   - (Remplacez YYYY par votre ID frontend)
+   - Cliquez **"Save Changes"**
+   - Attendez le redéploiement automatique (2-3 min)
+
+2. **Configurer le Frontend :**
+   - Dashboard → **taskflow-frontend** → **Environment**
+   - Ajoutez : `VITE_API_URL = https://taskflow-backend-XXXX.onrender.com`
+   - (Remplacez XXXX par votre ID backend)
+   - Cliquez **"Save Changes"**
+   - Attendez le redéploiement automatique (2-3 min)
+
+### ✅ Résultat attendu
+Les deux services redémarrent automatiquement avec les nouvelles configurations.
+
+---
+
+## ✍️ Exercice 10 : Vérifier le Déploiement
+
+### Objectif
 Tester que tout fonctionne en production.
 
 ### Instructions
 
 1. **Testez l'API Backend :**
-
    ```bash
    # Health check
-   curl https://edl-starter.onrender.com/health
+   curl https://taskflow-backend-XXXX.onrender.com/health
    ```
 
    Vous devriez voir :
-
    ```json
    {
      "status": "healthy",
@@ -782,9 +387,8 @@ Tester que tout fonctionne en production.
    ```
 
 2. **Créez une tâche :**
-
    ```bash
-   curl -X POST https://edl-starter.onrender.com/tasks \
+   curl -X POST https://taskflow-backend-XXXX.onrender.com/tasks \
      -H "Content-Type: application/json" \
      -d '{
        "title": "Test production",
@@ -794,9 +398,8 @@ Tester que tout fonctionne en production.
    ```
 
 3. **Listez les tâches :**
-
    ```bash
-   curl https://edl-starter.onrender.com/tasks
+   curl https://taskflow-backend-XXXX.onrender.com/tasks
    ```
 
 4. **Testez le Frontend :**
@@ -806,8 +409,196 @@ Tester que tout fonctionne en production.
    - Supprimez une tâche
 
 ### ✅ Résultat attendu
-
 Tout fonctionne parfaitement! 🎉
+
+---
+
+## ✍️ Exercice 11 : Vérifier la Persistence
+
+### Objectif
+Prouver que PostgreSQL persiste les données.
+
+### Instructions
+
+1. **Créez 3-4 tâches depuis le frontend**
+
+2. **Forcez un redéploiement :**
+   - Dashboard → **taskflow-backend**
+   - Cliquez **"Manual Deploy"** → **"Deploy latest commit"**
+   - Attendez le redéploiement (2-3 minutes)
+
+3. **Rafraîchissez votre frontend**
+
+### ✅ Résultat attendu
+Les tâches sont toujours là! PostgreSQL conserve les données entre les redémarrages.
+
+---
+
+## ✍️ Exercice 12 : Explorer la Base de Données
+
+### Objectif
+Voir directement les données dans PostgreSQL.
+
+### Instructions
+
+1. **Ouvrez le shell PostgreSQL :**
+   - Dashboard → **taskflow-db** → **Shell**
+
+2. **Exécutez ces commandes SQL :**
+   ```sql
+   -- Voir toutes les tables
+   \dt
+
+   -- Voir la structure de la table tasks
+   \d tasks
+
+   -- Voir toutes les tâches
+   SELECT id, title, status, priority, created_at FROM tasks;
+
+   -- Compter les tâches par statut
+   SELECT status, COUNT(*) FROM tasks GROUP BY status;
+   ```
+
+### ✅ Résultat attendu
+Vous voyez vos données stockées dans PostgreSQL!
+
+---
+
+## ✍️ Exercice 13 : Ajouter une Nouvelle Fonctionnalité
+
+### Objectif
+Démontrer le déploiement automatique en ajoutant un endpoint simple.
+
+### Instructions
+
+1. **Dans `backend/src/app.py`, ajoutez un endpoint de comptage :**
+   ```python
+   @app.get("/tasks/count")
+   async def count_tasks(db: Session = Depends(get_db)):
+       """Count total number of tasks."""
+       logger.info("Counting tasks")
+       total = db.query(TaskModel).count()
+       return {"total": total}
+   ```
+
+2. **Testez localement :**
+   ```bash
+   cd backend
+   uv run uvicorn src.app:app --reload
+
+   # Dans un autre terminal
+   curl http://localhost:8000/tasks/count
+   ```
+
+3. **Ajoutez un test dans `backend/tests/test_count.py` :**
+   ```python
+   def test_count_tasks(client):
+       """Test counting tasks."""
+       # Au début, 0 tâches
+       response = client.get("/tasks/count")
+       assert response.status_code == 200
+       assert response.json()["total"] == 0
+
+       # Créer 3 tâches
+       for i in range(3):
+           client.post("/tasks", json={
+               "title": f"Task {i+1}",
+               "status": "todo",
+               "priority": "medium"
+           })
+
+       # Maintenant, 3 tâches
+       response = client.get("/tasks/count")
+       assert response.status_code == 200
+       assert response.json()["total"] == 3
+   ```
+
+4. **Vérifiez que les tests passent :**
+   ```bash
+   uv run pytest -v
+   ```
+
+### ✅ Résultat attendu
+Tous les tests passent (20+ tests maintenant)
+
+---
+
+## ✍️ Exercice 14 : Déployer la Nouvelle Fonctionnalité
+
+### Objectif
+Observer le cycle complet CI/CD automatique.
+
+### Instructions
+
+1. **Committez et poussez :**
+   ```bash
+   git add .
+   git commit -m "feat: add task count endpoint
+
+   - Add GET /tasks/count endpoint
+   - Add test for count endpoint
+   - Returns total number of tasks in database"
+
+   git push origin main
+   ```
+
+2. **Observez GitHub Actions (1-2 min) :**
+   - GitHub → **Actions**
+   - Workflow démarre automatiquement
+   - Backend tests ✅
+   - Frontend tests ✅
+
+3. **Observez Render Auto-Deploy (3-5 min) :**
+   - Render Dashboard → **taskflow-backend**
+   - Status : "Deploying..."
+   - Observez les logs de build en temps réel
+
+4. **Testez en production :**
+   ```bash
+   curl https://taskflow-backend-XXXX.onrender.com/tasks/count
+   ```
+
+5. **Vérifiez dans Swagger UI :**
+   - Ouvrez : `https://taskflow-backend-XXXX.onrender.com/docs`
+   - Le nouveau endpoint `GET /tasks/count` apparaît
+   - Testez-le avec "Try it out"
+
+### ✅ Résultat attendu
+La nouvelle fonctionnalité est déployée automatiquement! 🚀
+
+---
+
+## 📊 Workflow Complet CI/CD
+
+**Ce qui s'est passé automatiquement :**
+
+```
+1. git push origin main
+   ↓
+2. GitHub Actions démarre
+   ├─ Backend: uv run pytest ✅
+   ├─ Frontend: npm test ✅
+   └─ Les tests passent
+   ↓
+3. Render détecte le push
+   ↓
+4. Render clone le nouveau code
+   ↓
+5. Render rebuild le backend
+   ├─ pip install uv
+   ├─ uv sync (install dependencies)
+   └─ uv run uvicorn (start server)
+   ↓
+6. Health check: /health ✅
+   ↓
+7. 🎉 Nouvelle version LIVE !
+
+Temps total: ~5-7 minutes
+```
+
+**Zero configuration nécessaire !** Tout est automatique grâce à :
+- `.github/workflows/backend.yml` (tests)
+- `render.yaml` (déploiement)
 
 ---
 
@@ -820,11 +611,17 @@ Félicitations ! Vous avez maintenant :
 ✅ **Exercice 3** : Créé le modèle ORM TaskModel
 ✅ **Exercice 4** : Migré app.py vers PostgreSQL
 ✅ **Exercice 5** : Adapté les tests avec une DB temporaire
-✅ **Exercice 6** : Configuré Supabase (base de données PostgreSQL)
-✅ **Exercice 7** : Déployé sur Render
-✅ **Exercice 8** : Vérifié le déploiement en production
+✅ **Exercice 6** : Créé un compte Render
+✅ **Exercice 7** : Compris render.yaml (IaC)
+✅ **Exercice 8** : Déployé avec Blueprint en un clic
+✅ **Exercice 9** : Configuré CORS et API URL
+✅ **Exercice 10** : Vérifié le déploiement en production
+✅ **Exercice 11** : Prouvé la persistence des données
+✅ **Exercice 12** : Exploré PostgreSQL avec SQL
+✅ **Exercice 13** : Ajouté un endpoint de comptage
+✅ **Exercice 14** : Déployé automatiquement avec CD
 
-**Temps total estimé :** 2h30
+**Temps total estimé :** 3 heures
 
 ---
 
@@ -832,7 +629,77 @@ Félicitations ! Vous avez maintenant :
 
 ✅ **SQLAlchemy ORM** - Modèles Python ↔ Tables SQL
 ✅ **PostgreSQL** - Base de données relationnelle professionnelle
-✅ **Déploiement Cloud** - Backend et Frontend sur Render
-✅ **Base de données managée** - Supabase pour PostgreSQL
-✅ **Variables d'environnement** - Configuration production vs développement
-✅ **CORS** - Communication cross-origin frontend/backend
+✅ **Infrastructure as Code** - render.yaml pour définir l'infra
+✅ **Continuous Deployment** - Push → Tests → Deploy automatique
+✅ **API REST** - Nouveaux endpoints avec tests
+✅ **Production monitoring** - Logs, health checks, database status
+✅ **Data persistence** - Les données survivent aux redémarrages
+
+---
+
+## 🚀 Pour Aller Plus Loin
+
+### Fonctionnalités Simples (30 min chacune)
+
+1. **Endpoint de recherche** : `GET /tasks/search?q=query`
+2. **Endpoint de filtrage** : `GET /tasks/filter/{status}`
+3. **Endpoint de statistiques** : `GET /tasks/stats` (compte par statut/priorité)
+4. **Badge de comptage** : Afficher le count dans le frontend
+
+### Fonctionnalités Avancées (1-2h chacune)
+
+1. **Pagination** : Ajouter `skip` et `limit` aux endpoints
+2. **Authentification** : JWT tokens avec FastAPI Security
+3. **Filtrage UI** : Boutons pour filtrer par statut dans le frontend
+4. **Dashboard de stats** : Graphiques avec Chart.js
+
+### DevOps Avancé
+
+1. **Monitoring** : Intégrer Sentry pour error tracking
+2. **Staging Environment** : Environnement de pré-production
+3. **Database Migrations** : Alembic pour migrations SQL
+4. **Custom Domain** : Utiliser votre propre nom de domaine
+
+---
+
+## ✅ Checklist de Fin d'Atelier
+
+**Migration PostgreSQL :**
+- [ ] SQLAlchemy et psycopg2 installés
+- [ ] `database.py` créé avec configuration
+- [ ] `models.py` créé avec TaskModel
+- [ ] `app.py` migré pour utiliser la DB
+- [ ] Tests adaptés avec base de test
+- [ ] Tests locaux passent
+
+**Déploiement :**
+- [ ] Compte Render créé
+- [ ] `render.yaml` compris
+- [ ] Blueprint déployé avec succès
+- [ ] Backend accessible via HTTPS
+- [ ] Frontend accessible via HTTPS
+- [ ] CORS configuré
+- [ ] PostgreSQL connectée
+
+**Continuous Deployment :**
+- [ ] Push déclenche GitHub Actions
+- [ ] Tests passent automatiquement
+- [ ] Render auto-deploy fonctionne
+- [ ] Nouvelles fonctionnalités visibles en prod
+- [ ] Données persistent après redéploiement
+
+**Si tout est coché : Bravo, vous maîtrisez le cycle complet ! 🎉🚀**
+
+---
+
+## 📚 Ressources
+
+**Documentation Technique :**
+- [SQLAlchemy Docs](https://docs.sqlalchemy.org/)
+- [FastAPI Database Guide](https://fastapi.tiangolo.com/tutorial/sql-databases/)
+- [Render Blueprint Spec](https://render.com/docs/blueprint-spec)
+- [PostgreSQL Docs](https://www.postgresql.org/docs/)
+
+---
+
+**Version 5.0** - TP 3 : Base de Données et Déploiement en Production (3h)
